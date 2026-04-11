@@ -563,9 +563,9 @@ class FailedVideo:
 
 コミット戦略 (2 章) と 1 対 1 で対応する。
 
-- [ ] 1. uv 初期化 + `pyproject.toml` / `.gitignore` / `.env.example` / `outputs/.gitkeep` 作成 → コミット1
-- [ ] 2. `types.py` (dataclass 群) → コミット2
-- [ ] 3. `url_parser.py` + テスト → コミット3
+- [x] 1. uv 初期化 + `pyproject.toml` / `.gitignore` / `.env.example` / `outputs/.gitkeep` 作成 → コミット1
+- [x] 2. `types.py` (dataclass 群) → コミット2
+- [x] 3. `url_parser.py` + テスト → コミット3
 - [ ] 4. `language.py` + テスト → コミット4
 - [ ] 5. `markdown_writer.py` + テスト → コミット5
 - [ ] 6. `run_report.py` + テスト → コミット6
