@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment variables (secrets)
+.env
+
+# Outputs (generated Markdown files)
+outputs/*
+!outputs/.gitkeep
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Whisper model cache (if downloaded into project dir)
+*.bin
