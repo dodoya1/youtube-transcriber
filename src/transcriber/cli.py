@@ -105,6 +105,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="既存ファイルを上書きする",
     )
     transcribe.add_argument(
+        "--whisper-only",
+        action="store_true",
+        help="字幕取得をスキップし、常に Whisper で文字起こしする",
+    )
+    transcribe.add_argument(
         "--no-translate",
         action="store_true",
         help="英語動画でも DeepL 翻訳をスキップする",
@@ -186,11 +191,22 @@ def _ensure_full_meta(meta: VideoMeta) -> VideoMeta:
         return meta
 
 
-def _obtain_transcript(meta: VideoMeta) -> TranscriptResult:
+def _obtain_transcript(
+    meta: VideoMeta,
+    *,
+    model_size: str = _DEFAULT_MODEL_SIZE,
+    whisper_only: bool = False,
+) -> TranscriptResult:
     """字幕 → Whisper の順に文字起こしを試みる.
+
+    ``whisper_only=True`` の場合は字幕取得をスキップし、直接 Whisper で
+    文字起こしする. 速度よりも正確性を優先したい場合に利用する.
 
     Args:
         meta: 対象動画のメタデータ.
+        model_size: Whisper モデルサイズ (``tiny`` / ``base`` / ``small`` /
+            ``medium`` / ``large-v3`` 等).
+        whisper_only: ``True`` のとき字幕取得をスキップする.
 
     Returns:
         取得できた ``TranscriptResult``.
@@ -199,16 +215,19 @@ def _obtain_transcript(meta: VideoMeta) -> TranscriptResult:
         youtube_client.TranscriberError: 音声ダウンロードに失敗した場合.
         FileNotFoundError: ダウンロードした音声ファイルが消失した場合.
     """
-    captioned = captions.fetch_captions(meta.video_id)
-    if captioned is not None:
-        _logger.info("字幕取得成功: %s (%s)", meta.video_id, captioned.language)
-        return captioned
+    if not whisper_only:
+        captioned = captions.fetch_captions(meta.video_id)
+        if captioned is not None:
+            _logger.info("字幕取得成功: %s (%s)", meta.video_id, captioned.language)
+            return captioned
+        _logger.info("字幕が見つからないため Whisper にフォールバックします: %s", meta.video_id)
+    else:
+        _logger.info("--whisper-only: Whisper で直接文字起こしします: %s", meta.video_id)
 
-    _logger.info("字幕が見つからないため Whisper にフォールバックします: %s", meta.video_id)
     with tempfile.TemporaryDirectory(prefix="yt-audio-") as tmp_str:
         tmp_dir = Path(tmp_str)
         audio_path = youtube_client.download_audio(meta.url, tmp_dir)
-        return whisper_transcribe.transcribe(audio_path)
+        return whisper_transcribe.transcribe(audio_path, model_size=model_size)
 
 
 def _finalize_language(result: TranscriptResult) -> TranscriptResult:
@@ -253,6 +272,8 @@ def _process_video(
     meta: VideoMeta,
     *,
     out_dir: Path,
+    model_size: str = _DEFAULT_MODEL_SIZE,
+    whisper_only: bool = False,
     force: bool,
     no_translate: bool,
 ) -> tuple[bool, bool, str | None]:
@@ -261,6 +282,8 @@ def _process_video(
     Args:
         meta: プレイリスト展開 or 単品取得で得た ``VideoMeta``.
         out_dir: 出力ディレクトリ.
+        model_size: Whisper モデルサイズ.
+        whisper_only: 字幕取得をスキップし Whisper のみ使用するかどうか.
         force: 既存ファイルを上書きするかどうか.
         no_translate: 翻訳を完全にスキップするかどうか.
 
@@ -269,7 +292,10 @@ def _process_video(
         例外が投げられた場合は呼び出し側で捕捉する.
     """
     full_meta = _ensure_full_meta(meta)
-    result = _finalize_language(_obtain_transcript(full_meta))
+    result = _finalize_language(
+        _obtain_transcript(full_meta, model_size=model_size,
+                           whisper_only=whisper_only)
+    )
     translated = _maybe_translate(result, no_translate=no_translate)
 
     written = write_outputs(
@@ -308,6 +334,8 @@ def run_transcribe(args: argparse.Namespace) -> int:
             written, skipped, _ = _process_video(
                 meta,
                 out_dir=out_dir,
+                model_size=args.model,
+                whisper_only=args.whisper_only,
                 force=args.force,
                 no_translate=args.no_translate,
             )
