@@ -580,8 +580,8 @@ class FailedVideo:
 - [x] 9. `whisper_transcribe.py` → コミット9
 - [x] 10. `translator.py` → コミット10
 - [x] 11. `cli.py` + `__main__.py` (transcribe サブコマンド) → コミット11
-- [ ] 12. `translate_file.py` + translate サブコマンド追加 + テスト → コミット12
-- [ ] 13. `uv run pytest` グリーン化
-- [ ] 14. `README.md` 執筆 → コミット13
-- [ ] 15. `uv.lock` を commit → コミット14
+- [x] 12. `translate_file.py` + translate サブコマンド追加 + テスト → コミット12
+- [x] 13. `uv run pytest` グリーン化
+- [x] 14. `README.md` 執筆 → コミット13
+- [x] 15. `uv.lock` を commit → コミット14 (※ 既に a130bc3 で commit 済み)
 - [ ] 16. 手動検証 (10 章) 実施 → 必要なら コミット15
