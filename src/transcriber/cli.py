@@ -1,7 +1,7 @@
-"""CLI エントリポイントと ``transcribe`` サブコマンドのパイプライン.
+"""CLI エントリポイントと ``transcribe`` / ``translate`` サブコマンド.
 
-``transcribe`` サブコマンドはここまでに実装してきた各モジュールを統合し、
-1 つ以上の YouTube URL を受け取って以下のパイプラインを実行する:
+``transcribe`` サブコマンドは各モジュールを統合し、1 つ以上の YouTube URL を
+受け取って以下のパイプラインを実行する:
 
 1. ``ffmpeg`` の存在確認 (無ければ親切なエラーで即中断).
 2. 各 URL を ``url_parser.classify`` で動画 / プレイリストに判別.
@@ -17,8 +17,10 @@
 5. 1 動画の失敗は ``RunReport`` に集約し、他の動画の処理は継続.
 6. 終了時に ``format_report`` を INFO ログで出力する.
 
-``translate`` サブコマンドは後続コミットで追加予定のため、ここでは
-``transcribe`` のみを ``add_subparsers`` に登録する.
+``translate`` サブコマンドは既存の Markdown ファイルを複数受け取り、
+``translate_file.translate_file`` を 1 件ずつ呼び出して同じフォルダに
+``-ja.md`` を書き出す. transcribe 時に翻訳だけ失敗した動画の再翻訳や
+後追いで日本語化したい手書き Markdown への対応を想定する.
 """
 
 import argparse
@@ -37,6 +39,7 @@ from transcriber import (captions, url_parser, whisper_transcribe,
 from transcriber.language import is_japanese, normalize_language_code
 from transcriber.markdown_writer import write_outputs
 from transcriber.run_report import RunReport, format_report
+from transcriber.translate_file import translate_file
 from transcriber.translator import TranslationError, translate_to_japanese
 from transcriber.types import FailedVideo, TranscriptResult, VideoMeta
 
@@ -105,6 +108,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-translate",
         action="store_true",
         help="英語動画でも DeepL 翻訳をスキップする",
+    )
+
+    translate = subparsers.add_parser(
+        "translate",
+        help="既存の Markdown ファイルを DeepL で翻訳し -ja.md を追加出力する",
+    )
+    translate.add_argument(
+        "files", nargs="+", help="翻訳対象の .md ファイルパス (複数可)"
+    )
+    translate.add_argument(
+        "--force",
+        action="store_true",
+        help="既存の -ja.md を上書きする",
     )
     return parser
 
@@ -312,6 +328,54 @@ def run_transcribe(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_translate(args: argparse.Namespace) -> int:
+    """``translate`` サブコマンドの本体ハンドラ.
+
+    各入力ファイルを ``translate_file`` に渡し、成功 / スキップ / 失敗を
+    ``RunReport`` に積み上げる. 1 ファイル単位で例外を捕捉し、他のファイル
+    の処理を継続する. 最後に ``format_report`` をログ出力する.
+
+    Args:
+        args: ``argparse`` がパースした引数. ``files`` と ``force`` を持つ.
+
+    Returns:
+        プロセス終了コード. 失敗があっても全体は 0 を返す.
+    """
+    load_dotenv()
+
+    report = RunReport()
+    for file_str in args.files:
+        path = Path(file_str)
+        try:
+            result = translate_file(path, force=args.force)
+        except FileNotFoundError as exc:
+            _logger.warning("入力ファイルが見つかりません: %s", path)
+            report = report.with_failure(
+                FailedVideo(title=path.name, url=str(path), reason=str(exc))
+            )
+            continue
+        except TranslationError as exc:
+            _logger.warning("翻訳に失敗: %s: %s", path, exc)
+            report = report.with_failure(
+                FailedVideo(title=path.name, url=str(path), reason=str(exc))
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001  (1 ファイル単位の広域捕捉)
+            _logger.exception("翻訳で予期せぬエラー: %s", path)
+            report = report.with_failure(
+                FailedVideo(title=path.name, url=str(path), reason=str(exc))
+            )
+            continue
+
+        if result is None:
+            report = report.with_skip()
+        else:
+            report = report.with_success()
+
+    _logger.info("\n%s", format_report(report))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI のエントリ関数.
 
@@ -327,6 +391,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "transcribe":
         return run_transcribe(args)
+    if args.command == "translate":
+        return run_translate(args)
 
     parser.error(f"未知のサブコマンド: {args.command}")
     return 2
