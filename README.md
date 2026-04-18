@@ -170,8 +170,7 @@ youtube-transcriber/
 ├── .gitignore
 ├── README.md
 ├── README.en.md
-├── CLAUDE.md
-└── plan.md
+└── CLAUDE.md
 ```
 
 ## 仕組み (概要)
