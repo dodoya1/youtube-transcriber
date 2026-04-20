@@ -66,6 +66,14 @@ def build_markdown(
 ) -> str:
     """YAML frontmatter + 本文の Markdown 文字列を生成する.
 
+    ``meta.source`` (``"youtube"`` / ``"x"`` / ``"local"``) によって
+    frontmatter の出力内容を変える:
+
+    - ``url``: 空文字列なら出力しない (ローカルファイル).
+    - ``channel``: 空文字列なら出力しない (ローカル / 一部の X 投稿).
+    - ``upload_date`` / ``duration``: 空文字列なら出力しない.
+    - ``origin``: 常に ``meta.source`` を出力する.
+
     翻訳版を生成する際は ``translated_from`` に元言語コードを渡すと、
     frontmatter に ``translated_from:`` 行が追加される.
 
@@ -79,12 +87,17 @@ def build_markdown(
     """
     lines: list[str] = ["---"]
     lines.append(f'title: "{_escape_quotes(meta.title)}"')
-    lines.append(f"url: {meta.url}")
-    lines.append(f'channel: "{_escape_quotes(meta.channel)}"')
-    lines.append(f"upload_date: {meta.upload_date}")
-    lines.append(f'duration: "{meta.duration}"')
+    if meta.url:
+        lines.append(f"url: {meta.url}")
+    if meta.channel:
+        lines.append(f'channel: "{_escape_quotes(meta.channel)}"')
+    if meta.upload_date:
+        lines.append(f"upload_date: {meta.upload_date}")
+    if meta.duration:
+        lines.append(f'duration: "{meta.duration}"')
     lines.append(f"language: {result.language}")
     lines.append(f"source: {result.source}")
+    lines.append(f"origin: {meta.source}")
     if translated_from is not None:
         lines.append(f"translated_from: {translated_from}")
     lines.append("---")

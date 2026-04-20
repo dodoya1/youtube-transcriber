@@ -80,6 +80,45 @@ class TestBuildMarkdown:
         assert 'duration: "00:12:34"' in md
         assert "language: en" in md
         assert "source: captions" in md
+        assert "origin: youtube" in md
+
+    def test_frontmatter_for_x_source(
+        self, sample_result: TranscriptResult
+    ) -> None:
+        """X(Twitter) ソースでは origin: x、channel が無ければ省略."""
+        meta = VideoMeta(
+            video_id="1234567890",
+            title="elonmusk - something witty",
+            url="https://x.com/elonmusk/status/1234567890",
+            channel="",
+            upload_date="2025-06-01",
+            duration="00:00:30",
+            source="x",
+        )
+        md = build_markdown(meta, sample_result)
+        assert "origin: x" in md
+        assert "url: https://x.com/elonmusk/status/1234567890" in md
+        assert "channel:" not in md
+
+    def test_frontmatter_for_local_source(
+        self, sample_result: TranscriptResult
+    ) -> None:
+        """ローカルソースでは url と channel が省略され origin: local."""
+        meta = VideoMeta(
+            video_id="abcdef123456",
+            title="my-recording",
+            url="",
+            channel="",
+            upload_date="2026-04-20",
+            duration="",
+            source="local",
+        )
+        md = build_markdown(meta, sample_result)
+        assert "origin: local" in md
+        assert "url:" not in md
+        assert "channel:" not in md
+        assert "duration:" not in md
+        assert "upload_date: 2026-04-20" in md
 
     def test_body_contains_title_heading_and_text(
         self, sample_meta: VideoMeta, sample_result: TranscriptResult
