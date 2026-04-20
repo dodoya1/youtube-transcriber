@@ -19,6 +19,10 @@ ENV/
 outputs/*
 !outputs/.gitkeep
 
+# Inputs (local media files for the `local` subcommand)
+inputs/*
+!inputs/.gitkeep
+
 # IDE / editors
 .vscode/
 .idea/

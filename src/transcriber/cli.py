@@ -1,15 +1,16 @@
-"""CLI エントリポイントと ``transcribe`` / ``translate`` サブコマンド.
+"""CLI エントリポイントとサブコマンド (``transcribe`` / ``translate`` / ``local``).
 
-``transcribe`` サブコマンドは各モジュールを統合し、1 つ以上の YouTube URL を
-受け取って以下のパイプラインを実行する:
+``transcribe`` サブコマンドは 1 つ以上の URL (YouTube / X) を受け取り、
+以下のパイプラインを実行する:
 
 1. ``ffmpeg`` の存在確認 (無ければ親切なエラーで即中断).
-2. 各 URL を ``url_parser.classify`` で動画 / プレイリストに判別.
+2. 各 URL を ``url_parser.classify`` で動画 / プレイリストに判別
+   (X URL は常に動画扱い).
 3. プレイリストは ``youtube_client.fetch_playlist_videos`` で展開.
 4. 動画ごとに try/except で独立実行:
 
-   - 字幕 (``captions.fetch_captions``) 取得.
-   - 失敗時は音声 DL → ``whisper_transcribe.transcribe`` にフォールバック.
+   - X やローカルは字幕を持たないため Whisper 直行.
+   - YouTube は字幕 (``captions.fetch_captions``) → Whisper のフォールバック.
    - ``language.is_japanese`` で最終的な言語を確定.
    - ``markdown_writer.write_outputs`` で Markdown を書き出し.
    - 英語かつ ``--no-translate`` 未指定なら DeepL 翻訳して ``-ja.md`` を追加.
@@ -19,8 +20,12 @@
 
 ``translate`` サブコマンドは既存の Markdown ファイルを複数受け取り、
 ``translate_file.translate_file`` を 1 件ずつ呼び出して同じフォルダに
-``-ja.md`` を書き出す. transcribe 時に翻訳だけ失敗した動画の再翻訳や
-後追いで日本語化したい手書き Markdown への対応を想定する.
+``-ja.md`` を書き出す.
+
+``local`` サブコマンドは ``inputs/`` フォルダ配下 (または明示指定された
+パス) の動画・音声ファイルを Whisper で文字起こしする. ネットワーク /
+yt-dlp / ffmpeg を一切呼ばず faster-whisper + PyAV に直接デコードを
+委ねる最短経路で動く.
 """
 
 import argparse
@@ -34,8 +39,8 @@ from typing import Sequence
 
 from dotenv import load_dotenv
 
-from transcriber import (captions, url_parser, whisper_transcribe,
-                         youtube_client)
+from transcriber import (captions, local_source, url_parser,
+                         whisper_transcribe, youtube_client)
 from transcriber.language import is_japanese, normalize_language_code
 from transcriber.markdown_writer import write_outputs
 from transcriber.run_report import RunReport, format_report
@@ -46,6 +51,7 @@ from transcriber.types import FailedVideo, TranscriptResult, VideoMeta
 _logger = logging.getLogger("transcriber")
 
 _DEFAULT_OUTPUT_DIR = Path("outputs")
+_DEFAULT_INPUTS_DIR = Path("inputs")
 _DEFAULT_MODEL_SIZE = "medium"
 
 
@@ -85,7 +91,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     transcribe = subparsers.add_parser(
         "transcribe",
-        help="YouTube URL から文字起こしを行い Markdown を出力する",
+        help="YouTube / X(Twitter) URL から文字起こしを行い Markdown を出力する",
     )
     transcribe.add_argument("urls", nargs="+", help="動画またはプレイリストの URL")
     transcribe.add_argument(
@@ -126,6 +132,43 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="既存の -ja.md を上書きする",
+    )
+
+    local = subparsers.add_parser(
+        "local",
+        help="ローカルの動画/音声ファイル (inputs/ または明示パス) を文字起こしする",
+    )
+    local.add_argument(
+        "files",
+        nargs="*",
+        help="対象ファイルのパス (省略時は --inputs-dir を再帰スキャン)",
+    )
+    local.add_argument(
+        "--inputs-dir",
+        type=Path,
+        default=_DEFAULT_INPUTS_DIR,
+        help="一括スキャンの対象ディレクトリ (既定: inputs)",
+    )
+    local.add_argument(
+        "--output-dir",
+        type=Path,
+        default=_DEFAULT_OUTPUT_DIR,
+        help="出力ディレクトリ (既定: outputs)",
+    )
+    local.add_argument(
+        "--model",
+        default=_DEFAULT_MODEL_SIZE,
+        help="Whisper モデルサイズ (既定: medium)",
+    )
+    local.add_argument(
+        "--force",
+        action="store_true",
+        help="既存ファイルを上書きする",
+    )
+    local.add_argument(
+        "--no-translate",
+        action="store_true",
+        help="英語音声でも DeepL 翻訳をスキップする",
     )
     return parser
 
@@ -409,6 +452,148 @@ def run_translate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _collect_local_paths(
+    files: Sequence[str], inputs_dir: Path, report: RunReport
+) -> tuple[list[Path], RunReport]:
+    """CLI 引数のパス文字列と ``inputs_dir`` スキャン結果をマージする.
+
+    明示指定されたパスは存在確認を行い、無ければ ``FailedVideo`` に積む.
+    ``files`` が空のときは ``inputs_dir`` を再帰スキャンする. 両方が空
+    リストになった場合は警告を出すが失敗扱いにはしない (呼び出し側で
+    RunReport を見て判断する).
+
+    Args:
+        files: CLI から渡されたパス文字列群.
+        inputs_dir: スキャン対象ディレクトリ.
+        report: 更新前の ``RunReport``.
+
+    Returns:
+        ``(paths, updated_report)`` のタプル. 重複パスは除去される.
+    """
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+
+    if files:
+        for f in files:
+            path = Path(f)
+            if not path.exists() or not path.is_file():
+                report = report.with_failure(
+                    FailedVideo(
+                        title=path.name or str(path),
+                        url=str(path),
+                        reason="ファイルが存在しません",
+                    )
+                )
+                continue
+            if not local_source.is_media_file(path):
+                report = report.with_failure(
+                    FailedVideo(
+                        title=path.name,
+                        url=str(path),
+                        reason=f"未対応の拡張子です: {path.suffix}",
+                    )
+                )
+                continue
+            resolved = path.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                ordered.append(resolved)
+    else:
+        scanned = local_source.list_media_files(inputs_dir)
+        if not scanned:
+            _logger.warning(
+                "%s に対応する動画/音声ファイルが見つかりませんでした", inputs_dir
+            )
+        for resolved in scanned:
+            if resolved not in seen:
+                seen.add(resolved)
+                ordered.append(resolved)
+
+    return ordered, report
+
+
+def _process_local_file(
+    path: Path,
+    *,
+    out_dir: Path,
+    model_size: str,
+    force: bool,
+    no_translate: bool,
+) -> tuple[bool, bool]:
+    """1 ファイル分のローカル文字起こしパイプラインを実行する.
+
+    字幕取得も音声ダウンロードも通さず、faster-whisper に直接ファイル
+    パスを渡す. 返り値は :func:`_process_video` と同じ ``(written, skipped)``.
+
+    Args:
+        path: 対象ファイルパス (絶対パス).
+        out_dir: 出力ディレクトリ.
+        model_size: Whisper モデルサイズ.
+        force: 既存ファイルを上書きするかどうか.
+        no_translate: 翻訳を完全にスキップするかどうか.
+
+    Returns:
+        ``(written_any, skipped)`` のタプル.
+    """
+    meta = local_source.build_meta(path)
+    _logger.info("ローカルファイルを処理中: %s", path)
+    result = _finalize_language(whisper_transcribe.transcribe(path, model_size=model_size))
+    translated = _maybe_translate(result, no_translate=no_translate)
+
+    written = write_outputs(
+        meta,
+        result,
+        translated_text=translated,
+        out_dir=out_dir,
+        force=force,
+    )
+    if written:
+        return True, False
+    return False, True
+
+
+def run_local(args: argparse.Namespace) -> int:
+    """``local`` サブコマンドの本体ハンドラ.
+
+    Args:
+        args: ``argparse`` がパースした引数.
+
+    Returns:
+        プロセス終了コード. 失敗ファイルがあっても 0 を返す.
+    """
+    load_dotenv()
+
+    out_dir: Path = args.output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    report = RunReport()
+    paths, report = _collect_local_paths(args.files, args.inputs_dir, report)
+
+    for path in paths:
+        try:
+            written, skipped = _process_local_file(
+                path,
+                out_dir=out_dir,
+                model_size=args.model,
+                force=args.force,
+                no_translate=args.no_translate,
+            )
+        except Exception as exc:  # noqa: BLE001 (1 ファイル単位の広域捕捉)
+            _logger.exception("ローカルファイル処理で予期せぬエラー: %s", path)
+            report = report.with_failure(
+                FailedVideo(title=path.name, url=str(path), reason=str(exc))
+            )
+            continue
+
+        if written:
+            report = report.with_success()
+        elif skipped:
+            report = report.with_skip()
+
+    _logger.info("\n%s", format_report(report))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI のエントリ関数.
 
@@ -426,6 +611,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_transcribe(args)
     if args.command == "translate":
         return run_translate(args)
+    if args.command == "local":
+        return run_local(args)
 
     parser.error(f"未知のサブコマンド: {args.command}")
     return 2

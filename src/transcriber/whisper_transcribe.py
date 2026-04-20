@@ -1,12 +1,19 @@
-"""``faster-whisper`` を使ったローカル文字起こしフォールバック.
+"""``faster-whisper`` を使ったローカル文字起こしエンジン.
 
-YouTube の字幕が取得できなかった動画に対して、ダウンロード済み音声ファイルを
-ローカルの Whisper モデルで文字起こしする. モデルはシングルトンとして
-遅延初期化し、同一プロセスで複数動画を処理する場合も 1 度しかロードしない.
+YouTube の字幕が取得できなかった動画への Whisper フォールバック、X(Twitter)
+動画への直接文字起こし、そしてローカル動画/音声ファイル (``local`` サブ
+コマンド経由) の文字起こしで共通して利用する.
 
-Apple Silicon / CPU でも安定する ``compute_type="int8"``、``device="auto"`` を
-既定とする. 初回実行時に約 1.5GB のモデルダウンロードが発生する旨を呼び出し
-前にログで告知する.
+``faster-whisper`` は PyAV (FFmpeg ライブラリの Python バインディング) を
+バンドルしており、mp3/wav/m4a/flac/ogg/opus/aac などの音声だけでなく
+mp4/mov/mkv/webm/avi などの動画コンテナからも自動で音声ストリームを抽出
+してデコードする. そのため本モジュールは任意の媒体ファイルパスをそのまま
+受け付けられる.
+
+モデルはシングルトンとして遅延初期化し、同一プロセスで複数ファイルを処理
+する場合も 1 度しかロードしない. Apple Silicon / CPU でも安定する
+``compute_type="int8"``、``device="auto"`` を既定とする. 初回実行時に
+約 1.5GB のモデルダウンロードが発生する旨を呼び出し前にログで告知する.
 """
 
 import logging
@@ -55,10 +62,15 @@ def _get_model(model_size: str) -> WhisperModel:
 def transcribe(
     audio_path: Path, model_size: str = _DEFAULT_MODEL_SIZE
 ) -> TranscriptResult:
-    """音声ファイルを Whisper で文字起こしし、プレーンテキストを返す.
+    """媒体ファイルを Whisper で文字起こしし、プレーンテキストを返す.
+
+    音声ファイル (mp3/wav/m4a/flac/ogg/opus/aac 等) だけでなく、動画
+    ファイル (mp4/mov/mkv/webm/avi 等) も直接渡せる. PyAV (faster-whisper
+    にバンドルされる FFmpeg ライブラリ) が最初の音声ストリームを抽出して
+    デコードするため、呼び出し側で音声抽出は不要.
 
     Args:
-        audio_path: 文字起こし対象の音声ファイルパス (mp3 等).
+        audio_path: 文字起こし対象の媒体ファイルパス.
         model_size: 使用する Whisper モデルのサイズ. 既定は ``medium``.
 
     Returns:
@@ -69,7 +81,7 @@ def transcribe(
         FileNotFoundError: ``audio_path`` が存在しない場合.
     """
     if not audio_path.exists():
-        raise FileNotFoundError(f"音声ファイルが存在しません: {audio_path}")
+        raise FileNotFoundError(f"媒体ファイルが存在しません: {audio_path}")
 
     _logger.info("Whisper 文字起こしを開始: %s", audio_path)
     model = _get_model(model_size)
