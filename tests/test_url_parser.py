@@ -1,13 +1,15 @@
 """``transcriber.url_parser`` モジュールのユニットテスト.
 
-純粋関数 (``classify`` / ``extract_video_id`` / ``extract_playlist_id``)
-のみを対象とし、ネットワーク通信は一切発生しない.
+純粋関数 (``classify`` / ``classify_source`` / ``is_x_url`` /
+``extract_video_id`` / ``extract_playlist_id``) のみを対象とし、
+ネットワーク通信は一切発生しない.
 """
 
 import pytest
 
-from transcriber.url_parser import (classify, extract_playlist_id,
-                                    extract_video_id)
+from transcriber.url_parser import (classify, classify_source,
+                                    extract_playlist_id, extract_video_id,
+                                    is_x_url)
 
 
 class TestClassify:
@@ -46,17 +48,107 @@ class TestClassify:
     @pytest.mark.parametrize(
         "url",
         [
+            "https://x.com/elonmusk/status/1234567890",
+            "https://twitter.com/elonmusk/status/1234567890",
+            "https://www.x.com/someuser/status/9876543210",
+            "https://mobile.twitter.com/u/status/12345",
+            "https://x.com/u/status/12345?s=20",
+            "https://x.com/u/status/12345/",
+            "https://x.com/u/status/12345/photo/1",
+        ],
+    )
+    def test_x_urls_are_video(self, url: str) -> None:
+        """X(Twitter) の status URL は ``video`` 扱い."""
+        assert classify(url) == "video"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
             "",
             "not-a-url",
             "https://www.example.com/",
             "https://www.youtube.com/",
             "https://www.youtube.com/watch",  # v パラメータが無い
+            "https://x.com/",
+            "https://x.com/elonmusk",  # status セグメント無し
+            "https://x.com/u/status/",  # ID 無し
+            "https://x.com/u/status/abc",  # ID が数字でない
         ],
     )
     def test_invalid_urls_raise(self, url: str) -> None:
-        """YouTube として解釈できない URL は ``ValueError`` を送出する."""
+        """解釈できない URL は ``ValueError`` を送出する."""
         with pytest.raises(ValueError):
             classify(url)
+
+
+class TestClassifySource:
+    """``classify_source`` 関数の動作確認."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://www.youtube.com/playlist?list=PL1234567890",
+        ],
+    )
+    def test_youtube(self, url: str) -> None:
+        """YouTube 系ドメインは ``youtube``."""
+        assert classify_source(url) == "youtube"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://x.com/elonmusk/status/1234567890",
+            "https://twitter.com/u/status/1234",
+            "https://mobile.x.com/u/status/1234",
+        ],
+    )
+    def test_x(self, url: str) -> None:
+        """X(Twitter) 系ドメインは ``x``."""
+        assert classify_source(url) == "x"
+
+    @pytest.mark.parametrize(
+        "url",
+        ["", "https://www.example.com/", "https://vimeo.com/12345"],
+    )
+    def test_invalid(self, url: str) -> None:
+        """サポート外ドメインは ``ValueError``."""
+        with pytest.raises(ValueError):
+            classify_source(url)
+
+
+class TestIsXUrl:
+    """``is_x_url`` 関数の動作確認."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://x.com/u/status/1234",
+            "https://twitter.com/u/status/5678",
+            "https://www.x.com/u/status/9",
+            "https://mobile.twitter.com/u/status/1",
+        ],
+    )
+    def test_true(self, url: str) -> None:
+        """有効な X status URL は ``True``."""
+        assert is_x_url(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "",
+            "https://x.com/u",
+            "https://x.com/u/status/",
+            "https://x.com/u/status/notanumber",
+            "https://www.youtube.com/watch?v=abc",
+            "https://example.com/u/status/1234",
+        ],
+    )
+    def test_false(self, url: str) -> None:
+        """X status URL でないものは ``False``."""
+        assert is_x_url(url) is False
 
 
 class TestExtractVideoId:
@@ -95,6 +187,7 @@ class TestExtractVideoId:
             "https://www.example.com/watch?v=dQw4w9WgXcQ",
             "https://www.youtube.com/watch",
             "https://youtu.be/",
+            "https://x.com/u/status/1234567890",
         ],
     )
     def test_invalid_raises(self, url: str) -> None:
