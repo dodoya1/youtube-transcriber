@@ -215,14 +215,19 @@ def _obtain_transcript(
         youtube_client.TranscriberError: 音声ダウンロードに失敗した場合.
         FileNotFoundError: ダウンロードした音声ファイルが消失した場合.
     """
-    if not whisper_only:
+    # X(Twitter) は字幕が基本付かず、youtube-transcript-api も使えないため
+    # 常に Whisper で直接文字起こしする.
+    use_captions = not whisper_only and meta.source == "youtube"
+    if use_captions:
         captioned = captions.fetch_captions(meta.video_id)
         if captioned is not None:
             _logger.info("字幕取得成功: %s (%s)", meta.video_id, captioned.language)
             return captioned
         _logger.info("字幕が見つからないため Whisper にフォールバックします: %s", meta.video_id)
-    else:
+    elif whisper_only:
         _logger.info("--whisper-only: Whisper で直接文字起こしします: %s", meta.video_id)
+    else:
+        _logger.info("ソース %s のため字幕取得をスキップし Whisper で文字起こしします: %s", meta.source, meta.video_id)
 
     with tempfile.TemporaryDirectory(prefix="yt-audio-") as tmp_str:
         tmp_dir = Path(tmp_str)
