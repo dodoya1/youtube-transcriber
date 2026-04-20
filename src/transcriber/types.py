@@ -10,18 +10,23 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class VideoMeta:
-    """1 本の YouTube 動画のメタデータ.
+    """1 本の動画 (YouTube / X / ローカル) のメタデータ.
 
     yt-dlp などから取得した動画情報を正規化して保持する. ファイル名の
-    生成や Markdown の frontmatter 出力に用いる.
+    生成や Markdown の frontmatter 出力に用いる. ソース (YouTube / X /
+    ローカルファイル) によって一部フィールドが空文字列になり得る.
 
     Attributes:
-        video_id: YouTube の動画 ID (例: ``dQw4w9WgXcQ``).
+        video_id: 動画 ID (YouTube 動画 ID / X ツイート ID / ローカル
+            ファイルパスから算出した識別子).
         title: 動画タイトル (サニタイズ前).
-        url: 動画の正規 URL (``https://www.youtube.com/watch?v=...``).
-        channel: チャンネル名.
-        upload_date: 投稿日 (``YYYY-MM-DD`` 形式).
-        duration: 再生時間 (``HH:MM:SS`` 形式).
+        url: 動画の正規 URL. ローカルファイルの場合は空文字列.
+        channel: チャンネル名 / 投稿者名. 取得できない場合は空文字列.
+        upload_date: 投稿日 (``YYYY-MM-DD`` 形式). 不明なら空文字列.
+        duration: 再生時間 (``HH:MM:SS`` 形式). 不明なら空文字列.
+        source: 入力ソース種別 (``"youtube"`` / ``"x"`` / ``"local"``).
+            markdown_writer の frontmatter 出力時に ``origin`` キーとして
+            出力する. デフォルトは ``"youtube"`` で後方互換を保つ.
     """
 
     video_id: str
@@ -30,6 +35,7 @@ class VideoMeta:
     channel: str
     upload_date: str
     duration: str
+    source: str = "youtube"
 
 
 @dataclass(frozen=True)

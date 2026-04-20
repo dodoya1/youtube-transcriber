@@ -1,10 +1,13 @@
 """``yt-dlp`` をラップし、メタデータ取得 / プレイリスト展開 / 音声 DL を行う.
 
-``yt_dlp.YoutubeDL`` は大量のオプションを持つが、本プロジェクトで必要な
-のは以下 3 点に限られる:
+``yt_dlp.YoutubeDL`` は YouTube だけでなく X(Twitter) など多数のサイトを
+サポートしているため、本モジュールは URL のドメインを気にせず yt-dlp の
+info dict を ``VideoMeta`` に正規化することに集中する.
+
+必要な処理は以下 3 点:
 
 1. 単一動画の正規化されたメタデータ取得 (タイトル / チャンネル / 長さ etc.)
-2. プレイリストから動画 URL 一覧への展開 (``extract_flat=True``)
+2. プレイリストから動画 URL 一覧への展開 (``extract_flat=True``、YouTube 専用)
 3. ``bestaudio`` + ``FFmpegExtractAudio`` による mp3 音声ダウンロード
 
 yt-dlp 側の ``DownloadError`` / ``ExtractorError`` は上位層で扱いやすいよう
@@ -20,6 +23,7 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
 from transcriber.types import VideoMeta
+from transcriber.url_parser import classify_source
 
 _logger = logging.getLogger(__name__)
 
@@ -63,37 +67,68 @@ def _format_upload_date(raw: Any) -> str:
     return ""
 
 
-def _info_to_meta(info: dict[str, Any]) -> VideoMeta:
+def _resolve_source(url: str) -> str:
+    """URL から ``VideoMeta.source`` 用の識別子を決定する.
+
+    Args:
+        url: 動画 URL.
+
+    Returns:
+        ``"youtube"`` / ``"x"`` / 判定不能時は ``"youtube"``.
+    """
+    try:
+        return classify_source(url)
+    except ValueError:
+        return "youtube"
+
+
+def _info_to_meta(info: dict[str, Any], *, source: str) -> VideoMeta:
     """``YoutubeDL.extract_info`` の戻り dict を ``VideoMeta`` に変換する.
+
+    YouTube の info dict は ``channel`` を持つが X(Twitter) は持たず
+    ``uploader`` / ``uploader_id`` のみのため、フォールバック順で埋める.
 
     Args:
         info: yt-dlp が返す動画情報 dict.
+        source: 入力ソース種別 (``"youtube"`` / ``"x"`` 等).
 
     Returns:
         正規化された ``VideoMeta``.
     """
     video_id = info.get("id") or ""
-    url = info.get("webpage_url") or (
-        f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+    fallback_url = (
+        f"https://www.youtube.com/watch?v={video_id}"
+        if source == "youtube" and video_id
+        else ""
+    )
+    url = info.get("webpage_url") or fallback_url
+    channel = (
+        info.get("channel")
+        or info.get("uploader")
+        or info.get("uploader_id")
+        or ""
     )
     return VideoMeta(
         video_id=video_id,
         title=info.get("title") or "",
         url=url,
-        channel=info.get("channel") or info.get("uploader") or "",
+        channel=channel,
         upload_date=_format_upload_date(info.get("upload_date")),
         duration=_format_duration(info.get("duration")),
+        source=source,
     )
 
 
 def fetch_video_meta(url: str) -> VideoMeta:
-    """単一動画 URL からメタデータを取得する.
+    """単一動画 URL からメタデータを取得する (YouTube / X 共通).
 
     Args:
-        url: 動画 URL (``watch?v=...`` / ``youtu.be/...``).
+        url: 動画 URL (YouTube の ``watch?v=...`` / ``youtu.be/...`` /
+            X の ``x.com/.../status/...`` / ``twitter.com/.../status/...``).
 
     Returns:
-        正規化済みの ``VideoMeta``.
+        正規化済みの ``VideoMeta``. ``source`` フィールドに URL から判定
+        したソース種別 (``youtube`` / ``x``) が入る.
 
     Raises:
         TranscriberError: yt-dlp が情報取得に失敗した場合 (非公開 / 削除 /
@@ -107,7 +142,7 @@ def fetch_video_meta(url: str) -> VideoMeta:
         raise TranscriberError(f"動画メタ取得に失敗: {url}: {exc}") from exc
     if not isinstance(info, dict):
         raise TranscriberError(f"動画情報が取得できませんでした: {url}")
-    return _info_to_meta(info)
+    return _info_to_meta(info, source=_resolve_source(url))
 
 
 def fetch_playlist_videos(url: str) -> list[VideoMeta]:
@@ -157,6 +192,7 @@ def fetch_playlist_videos(url: str) -> list[VideoMeta]:
                 channel=entry.get("channel") or entry.get("uploader") or "",
                 upload_date=_format_upload_date(entry.get("upload_date")),
                 duration=_format_duration(entry.get("duration")),
+                source="youtube",
             )
         )
     return results
